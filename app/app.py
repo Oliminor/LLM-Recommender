@@ -3,16 +3,20 @@ import os
 import openai
 import pickle
 import streamlit as st
+import torch
 
 from urllib.error import URLError
 from redisvl.vectorize.text import HFTextVectorizer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+torch.classes.__path__ = [os.path.join(torch.__path__[0], torch.classes.__file__)] 
 
 from app.config import (
     CHAT_MODEL,
     VECTORIZER,
     DATAFILE
 )
+
 from app.retrieve import (
     create_retrieval_index,
     retrieve_context,
@@ -99,7 +103,7 @@ def main():
 
         col1, col2 = st.columns([4,2])
 
-        st.write("# LLM Hotel Recommender")
+        st.write("# Bence's LLM Hotel Recommender")
         with st.sidebar:
             st.write("## Filter By Location")
             st.selectbox("State", STATES, key="state", on_change=set_city)
