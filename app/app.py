@@ -29,6 +29,20 @@ from app.prompt import (
     format_prompt_reviews,
     get_recommended_hotel_prompt
 )
+from junk import (
+    insert_comment,
+    insert_book,
+    search_book
+)
+
+from Article_Recommender import (
+    add_article,
+    get_user_id,
+    get_user_articles,
+    search_similar_articles,
+    vectorize_all_articles,
+
+)
 
 from app.constants import (
     STATES,
@@ -76,10 +90,131 @@ def set_city():
         return CITIES[state][0]
     except IndexError:
         return []
+    
+import app.state as state
 
 
-def main():
+def main(): 
+    vectorize_all_articles()
+
+
+    # Streamlit UI
+    st.sidebar.title("User Panel")
+
+    # Input for username at the top of the sidebar
+    username = st.sidebar.text_input("Enter your username")
+
+    # Button to toggle article submission panel
+    if st.sidebar.button("➕ Add New Article"):
+        state.ArticleState = state.ArticleState.ADD_ARTICLE
+
+    if st.sidebar.button("Recommend Articles"):
+        state.ArticleState = state.ArticleState.RECOMMEND_ARTICLE
+
+    # Article submission form in the main area
+    if state.ArticleState == state.ArticleState.ADD_ARTICLE:
+        st.title("📝 Add a New Article")
+
+        article_title = st.text_input("Article Title")
+        article_body = st.text_area("Article Body")
+
+        if st.button("Submit Article"):
+            if username and article_title and article_body:
+                message = add_article(username, article_title, article_body)
+                st.success(message)
+                st.session_state["show_form"] = False  # Hide form after submission
+            else:
+                st.error("❌ Please fill in all fields before submitting.")
+
+    # Article recommender
+    if state.ArticleState == state.ArticleState.RECOMMEND_ARTICLE:
+        if st.button("Recommend Article"):
+            user = get_user_id(username)
+            if not user:
+                st.write("❌ Username not found")  
+            else:    
+                articles = get_user_articles(user)
+                if not articles:
+                    st.write("❌ Article(s) not found")
+                else:
+                    # Iterate over each article and fetch similar articles
+                    for article in articles:
+                        article_id, article_title = article  # Unpack the tuple into id and title
+
+                        # Print the article title (optional)
+                        st.write(f"Article title: {article_title}")
+
+                        # Use the article_id in the search_similar_articles function
+                        similar_articles = search_similar_articles(article_id, user)
+
+                        # Display the similar articles
+                        for similar_article in similar_articles:
+                            st.write(f"Similar article title: {similar_article[1]}")
+
+''' #Book pratice code
+    st.write("# Bence's Book practice")
+
+    st.write("## Search for a book")
+    search_title = st.text_input("Enter book title to search")
+
+    # Search button
+    if st.button("Search"):
+        state.CURRENT_STATE = state.BookAppState.DEFAULT
+        if search_title:
+            print("Search")
+            books = search_book(search_title)
+            if books:
+                print("Books")
+                state.SELECTED_BOOKS_ID = books
+                state.CURRENT_STATE = state.BookAppState.IS_BOOK_FOUND
+            else:
+                print("Else")
+                state.CURRENT_STATE = state.BookAppState.IS_NOT_FOUND
+
+
+        else:
+            st.warning("Please enter a title to search.")
+
+    if state.CURRENT_STATE == state.BookAppState.IS_BOOK_FOUND:
+        for book in state.SELECTED_BOOKS_ID:
+            col1, col2 = st.columns([3, 1])  # This defines the width ratio (3:1)
+
+            # In the first column, write some text
+            with col1:
+                st.write(f"📖 **Title:** {book[1]}")
+
+            # In the second column, place the text input box
+            with col2:
+                if st.button("Add Comment", key=f"add_comment_{book}"):
+                    state.CURRENT_STATE = state.BookAppState.IS_BOOK_SELECTED
+                    state.SELECTED_BOOK_ID = book
+                    st.rerun()
+
+    if state.CURRENT_STATE == state.BookAppState.IS_BOOK_SELECTED:
+        st.write(f"## Add Comment to the book: {state.SELECTED_BOOK_ID[1]}")
+        book_comment = st.text_input("Comment")
+        if st.button("Add Comment"):
+            insert_comment(state.SELECTED_BOOK_ID[0], book_comment)
+            st.rerun()
+
+    if state.CURRENT_STATE == state.BookAppState.IS_NOT_FOUND:
+        st.write("No books found with that title.")
+        st.write("## Add a book to the library!")
+        book_title = st.text_input("Book Title")
+        book_comment = st.text_input("Comment")
+        if st.button("Add to the library"):
+            if book_title and book_comment:  # Ensure fields are not empty
+                insert_book(book_title, book_comment)
+            else:
+                st.warning("Please fill in both fields before adding.")
+'''
+
+''' # Hotel codes
+    # this data thing stores a list of dictionaries.
     data = load_data()
+    print(type(data))
+    # for datum in data:
+    #     print(datum)
     INDEX = create_retrieval_index(data)
     EMBEDDING_MODEL = vectorizer()
 
@@ -126,7 +261,8 @@ def main():
                     st.session_state['positive'],
                     st.session_state['negative']
                 )
-
+                print(f"Prompt: {hyde_prompt}")
+                print(f"Embed: {EMBEDDING_MODEL.embed(hyde_prompt)}")
                 # Retrieve the context
                 context = retrieve_context(INDEX,
                                            hyde_prompt,
@@ -187,4 +323,5 @@ def main():
             Connection error: %s
             """
             % e.reason
-        )
+        )'
+'''
