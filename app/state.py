@@ -14,5 +14,9 @@ SELECTED_BOOKS_ID: object
 class ArticleState(Enum):
     ADD_ARTICLE = 0
     RECOMMEND_ARTICLE = 1
+    MY_ARTICLES = 2
 
 CURRENT_STATE: ArticleState = ArticleState.ADD_ARTICLE
+MY_ARTICLE_TITLES = []
+SIMILAR_ARTICLES = {}
+SELECTED_ARTICLE: object

@@ -38,10 +38,11 @@ from junk import (
 from Article_Recommender import (
     add_article,
     get_user_id,
-    get_user_articles,
+    get_user_article_titles,
     search_similar_articles,
-    vectorize_all_articles,
-
+    get_article_body_by_id,
+    get_user_by_article_id,
+    get_article_title_by_id,
 )
 
 from app.constants import (
@@ -95,14 +96,13 @@ import app.state as state
 
 
 def main(): 
-    vectorize_all_articles()
-
 
     # Streamlit UI
     st.sidebar.title("User Panel")
 
     # Input for username at the top of the sidebar
     username = st.sidebar.text_input("Enter your username")
+    user_id = get_user_id(username)
 
     # Button to toggle article submission panel
     if st.sidebar.button("➕ Add New Article"):
@@ -110,6 +110,9 @@ def main():
 
     if st.sidebar.button("Recommend Articles"):
         state.ArticleState = state.ArticleState.RECOMMEND_ARTICLE
+
+    if st.sidebar.button("My Articles"):
+        state.ArticleState = state.ArticleState.MY_ARTICLES
 
     # Article submission form in the main area
     if state.ArticleState == state.ArticleState.ADD_ARTICLE:
@@ -129,27 +132,96 @@ def main():
     # Article recommender
     if state.ArticleState == state.ArticleState.RECOMMEND_ARTICLE:
         if st.button("Recommend Article"):
-            user = get_user_id(username)
-            if not user:
+            state.SELECTED_ARTICLE = 0
+
+            if not user_id:
                 st.write("❌ Username not found")  
             else:    
-                articles = get_user_articles(user)
+                articles = get_user_article_titles(user_id)
                 if not articles:
                     st.write("❌ Article(s) not found")
                 else:
-                    # Iterate over each article and fetch similar articles
-                    for article in articles:
+                   # Sort user's articles by article_id in descending order and select the latest 3
+                    latest_articles = sorted(articles, key=lambda x: x[0], reverse=True)[:3]
+
+                    state.MY_ARTICLE_TITLES = latest_articles
+
+                    # Iterate over the latest 3 articles and fetch similar articles
+                    for i, article in enumerate(latest_articles):
                         article_id, article_title = article  # Unpack the tuple into id and title
 
-                        # Print the article title (optional)
-                        st.write(f"Article title: {article_title}")
-
                         # Use the article_id in the search_similar_articles function
-                        similar_articles = search_similar_articles(article_id, user)
+                        similar_articles = search_similar_articles(article_id, user_id)
 
-                        # Display the similar articles
-                        for similar_article in similar_articles:
-                            st.write(f"Similar article title: {similar_article[1]}")
+                        if not hasattr(state, 'SIMILAR_ARTICLES'):
+                            state.SIMILAR_ARTICLES = {}
+
+                        # Save the entire list of similar articles in state.SIMILAR_ARTICLES
+                        state.SIMILAR_ARTICLES[article_id] = similar_articles  # Storing the whole array under article_id
+
+        if state.MY_ARTICLE_TITLES is not None:
+
+            state.SELECTED_ARTICLE = 0
+
+            for i, article in enumerate(state.MY_ARTICLE_TITLES):
+                # Unpack the article to get its title
+                article_id, article_title = article
+
+                # Print the article title
+                st.write(f"##### Article title: {article_title}")
+
+                # Get similar articles for the current article
+                similar_articles = state.SIMILAR_ARTICLES.get(article_id, [])
+
+                if not similar_articles:    
+                    st.write("⚠️ No similar articles found.")
+                elif isinstance(similar_articles, list) and isinstance(similar_articles[0], dict):
+                    for similar_article in similar_articles:
+                        # Ensure each button has a unique key by using both article_id and similar_article['id']
+                        button_key = f"{article_id}_{similar_article['id']}"
+
+                        # Create two columns: one for the title and one for the button
+                        col1, col2 = st.columns([3, 1])  # Adjust column widths (3 for title, 1 for the button)
+
+                        with col1:
+                            # Display the similar article title and the author's username
+                            st.write(f"**Similar article title:** {similar_article['title']} - {get_user_by_article_id(similar_article['id'])}")
+
+                        with col2:
+                            # Create a button to read the full article with a unique key
+                            if st.button(f"Read Article", key=button_key):
+                                state.SELECTED_ARTICLE = similar_article['id']
+                                
+                        if (similar_article['id'] == state.SELECTED_ARTICLE):
+                            article_body = get_article_body_by_id(similar_article['id'])
+                            st.write(f"\n{article_body}")
+                        
+                else:
+                    st.write("⚠️ Unexpected format for similar_articles.")
+
+
+
+    if state.ArticleState == state.ArticleState.MY_ARTICLES:
+        st.title("My Articles")
+
+        articles = get_user_article_titles(user_id)  # Fetch user article titles (id, title)
+
+        for i, article in enumerate(articles):  # Use enumerate to get index of the article
+            article_id, article_title = article  # Unpack the tuple into id and title
+
+            # Display the article title
+            st.write(f"**Article title:** {article_title}")
+
+            # Create a button for each article
+            if st.button(f"Expand", key=article_id):
+                # Fetch the article body using the article ID
+                article_body = get_article_body_by_id(article_id)  # Fetch the body by article_id
+                
+                # Display the article body under the title when the button is clicked
+                if article_body:
+                    st.write(f"\n{article_body}")
+                else:
+                    st.write("⚠️ Article body not found.")
 
 ''' #Book pratice code
     st.write("# Bence's Book practice")
