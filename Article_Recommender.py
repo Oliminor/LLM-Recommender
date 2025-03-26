@@ -1,5 +1,4 @@
 import openai
-import psycopg2
 import numpy as np
 import spacy
 import re
@@ -66,23 +65,22 @@ def store_article_embedding(article_id, article_title, article_body):
     
     # Get embedding for body
     body_embedding = get_openai_embedding(article_body)
-    
-    # Connect to the database
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
+
+    # Log the storing action
     print(f"Storing embedding for article_id: {article_id}, article: {article_title}")
 
-    # Update title and body embeddings in the database
-    cur.execute(
-        f"UPDATE {article_table} SET embedding_title = %s, embedding_body = %s WHERE id = %s;",
-        (title_embedding, body_embedding, article_id)
-    )
-    
-    # Commit changes and close connection
-    conn.commit()
-    cur.close()
-    conn.close()
+    # Use Peewee to update the article's embeddings
+    try:
+        # Find the article by its ID and update the embeddings
+        article = Article.get(Article.id == article_id)
+        article.embedding_title = title_embedding
+        article.embedding_body = body_embedding
+        article.save()  # Save the updated article with the new embeddings
+        print(f"✅ Embedding stored successfully for article_id: {article_id}")
+
+    except Article.DoesNotExist:
+        print(f"⚠️ Article with ID {article_id} does not exist.")
+        
 
 def preprocess_text(text):
     """Filter out stopwords and keep relevant words while maintaining sentence structure."""
@@ -92,29 +90,23 @@ def preprocess_text(text):
 
 def vectorize_all_articles():
     """Convert all articles into embeddings (title and body separately) after preprocessing."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-
     # Fetch all articles that don't have embeddings for title or body yet
-    cur.execute(f"SELECT id, article_title, article_body FROM {article_table} WHERE embedding_title IS NULL OR embedding_body IS NULL;")
-    articles = cur.fetchall()
+    articles = Article.select().where((Article.embedding_title.is_null(True)) | (Article.embedding_body.is_null(True)))
 
-    for article_id, title, body in articles:
+    for article in articles:
         # Preprocess text to remove stopwords while keeping context
-        filtered_title = preprocess_text(title)
-        filtered_body = preprocess_text(body)
+        filtered_title = preprocess_text(article.article_title)
+        filtered_body = preprocess_text(article.article_body)
 
         # Generate embeddings separately for the filtered title and body
         title_embedding = get_openai_embedding(filtered_title)
         body_embedding = get_openai_embedding(filtered_body)
 
         # Update the database with the separate embeddings
-        cur.execute(f"UPDATE {article_table} SET embedding_title = %s, embedding_body = %s WHERE id = %s;", 
-                    (title_embedding, body_embedding, article_id))
+        article.embedding_title = title_embedding
+        article.embedding_body = body_embedding
+        article.save()  # Save the updated article with the embeddings
 
-    conn.commit()
-    cur.close()
-    conn.close()
     print(f"✅ Processed and stored {len(articles)} article embeddings.")
 
 
@@ -122,68 +114,59 @@ def search_similar_articles(article_id, exclude_user_id):
     """Search for articles similar to a given article by title and body separately while ignoring articles from a specific user.
        Then, send the results to ChatGPT for final filtering based on relevance.
     """
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
+    try:
+        # Fetch the target article's title, body, and embeddings
+        target_article = Article.get(Article.id == article_id)
+        
+        target_title = target_article.article_title
+        target_body = target_article.article_body
+        title_embedding = target_article.embedding_title
+        body_embedding = target_article.embedding_body
 
-    # Get the title and body embeddings of the selected article
-    cur.execute(f"SELECT article_title, article_body, embedding_title, embedding_body FROM {article_table} WHERE id = %s;", (article_id,))
-    result = cur.fetchone()
+        if not title_embedding and not body_embedding:
+            print(f"⚠️ Both title and body embeddings are missing for article ID {article_id}.")
+            return []
 
-    if not result:
-        print(f"⚠️ No embeddings found for article ID {article_id}.")
+        print(f"Searching for articles similar to ID {article_id} (excluding user {exclude_user_id})...")
+
+        # Query to fetch similar articles based on title and body embeddings using pgvector extension for vector similarity
+        similar_articles = (
+            Article.select(
+                Article.id,
+                Article.article_title,
+                Article.article_body,
+                # Using cosine_distance for similarity
+                (1 - Article.embedding_title.cosine_distance(title_embedding)).alias('title_similarity'),
+                (1 - Article.embedding_body.cosine_distance(body_embedding)).alias('body_similarity')
+            )
+            .join(Username)  # Joining with the Username table
+            .where((Article.fk_username != exclude_user_id) & 
+                   (Article.embedding_title.is_null(False) & Article.embedding_body.is_null(False)))
+            .order_by(SQL('title_similarity + body_similarity').desc())  # Sorting by total similarity
+            .limit(5)
+        )
+
+        # Prepare the articles list with similarity scores
+        articles_list = []
+        for article in similar_articles:
+            articles_list.append({
+                "id": article.id,
+                "title": article.article_title,
+                "body": article.article_body,
+                "title_similarity": article.title_similarity,
+                "body_similarity": article.body_similarity
+            })
+
+        if not articles_list:
+            print(f"⚠️ No similar articles found for article ID {article_id}.")
+            return []
+
+        # Send articles to ChatGPT for filtering
+        return filter_relevant_articles(target_title, target_body, articles_list)
+
+    except Article.DoesNotExist:
+        print(f"⚠️ Article ID {article_id} does not exist.")
         return []
-
-    target_title, target_body, title_embedding, body_embedding = result
-
-    # Check for None values and convert to list if valid
-    title_embedding = np.array(title_embedding).tolist() if title_embedding is not None else None
-    body_embedding = np.array(body_embedding).tolist() if body_embedding is not None else None
-
-    if not title_embedding and not body_embedding:
-        print(f"⚠️ Both title and body embeddings are missing for article ID {article_id}.")
-        return []
-
-    print(f"Searching for articles similar to ID {article_id} (excluding user {exclude_user_id})...")
-
-    # Run a single query to get similarity based on both title and body
-    cur.execute(f"""
-        SELECT 
-            id, 
-            article_title, 
-            article_body, 
-            1 - (embedding_title <=> %s::vector) AS title_similarity,
-            1 - (embedding_body <=> %s::vector) AS body_similarity
-        FROM {article_table}
-        WHERE fk_username != %s
-        ORDER BY 
-            (1 - (embedding_title <=> %s::vector)) + (1 - (embedding_body <=> %s::vector)) DESC
-        LIMIT 5;
-    """, (title_embedding, body_embedding, exclude_user_id, title_embedding, body_embedding))
-
-    results = cur.fetchall()
-
-    if not results:
-        print(f"⚠️ No similar articles found for article ID {article_id}.")
-        cur.close()
-        conn.close()
-        return []
-
-    cur.close()
-    conn.close()
-
-    # Prepare articles for ChatGPT filtering
-    articles_list = []
-    for article_id, article_title, article_body, title_similarity, body_similarity in results:
-        articles_list.append({
-            "id": article_id,
-            "title": article_title,
-            "body": article_body,
-            "title_similarity": title_similarity,
-            "body_similarity": body_similarity
-        })
-
-    # Send articles to ChatGPT for filtering
-    return filter_relevant_articles(target_title, target_body, articles_list)
 
 def filter_relevant_articles(target_title, target_body, articles_list):
     """Uses ChatGPT to filter the most relevant articles from the top 5 returned by similarity."""
@@ -210,7 +193,7 @@ def filter_relevant_articles(target_title, target_body, articles_list):
 
     # Call OpenAI API
     response = openai.ChatCompletion.create(
-        #model="gpt-4o-mini",
+        model="gpt-4o-mini",
         messages=[{"role": "system", "content": "You are an intelligent article recommender."},
                   {"role": "user", "content": prompt}]
     )
@@ -229,133 +212,67 @@ def filter_relevant_articles(target_title, target_body, articles_list):
 
 def add_article(username, article_title, article_body):
     """Add a new article to the database. If the user does not exist, add them first."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-
-    # Check if the user exists
-    cur.execute(f"SELECT id FROM {username_table} WHERE username = %s;", (username,))
-    user = cur.fetchone()
+    # Check if the user exists using Peewee ORM
+    user = Username.get_or_none(Username.username == username)
 
     if user:
-        user_id = user[0]  # Existing user ID
+        # Use the existing user
+        user_id = user
     else:
-        # Insert new user and get the ID
-        cur.execute(f"INSERT INTO {username_table} (username) VALUES (%s) RETURNING id;", (username,))
-        user_id = cur.fetchone()[0]
-        print(f"✅ Added new user: {username} (ID: {user_id})")
+        # Insert new user using Peewee ORM
+        user = Username.create(username=username)
+        user_id = user
+        print(f"✅ Added new user: {username} (ID: {user_id.id})")
 
-    # Insert the article into the database and get its ID
-    cur.execute(f"""
-        INSERT INTO {article_table} (fk_username, article_title, article_body)
-        VALUES (%s, %s, %s) RETURNING id;
-    """, (user_id, article_title, article_body))
-    
-    article_id = cur.fetchone()[0]  # Retrieve the newly inserted article ID
-    conn.commit()
-    
-    cur.close()
-    conn.close()
+    # Insert the article into the database using Peewee ORM
+    article = Article.create(fk_username=user, article_title=article_title, article_body=article_body)
+    article_id = article.id  # Retrieve the newly inserted article ID
 
     # Generate and store embeddings
     store_article_embedding(article_id, article_title, article_body)
 
     return f"✅ Article '{article_title}' added successfully with embeddings!"
 
+
 def get_user_id(username):
-    """Fetch user ID based on the provided username."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
-    cur.execute(f"SELECT id FROM {username_table} WHERE username = %s;", (username,))
-    user = cur.fetchone()
-    
-    cur.close()
-    conn.close()
-    
-    if user:
-        return user[0]
-    else:
+    """Fetch user ID based on the provided username using Peewee."""
+    try:
+        # Query the user from the Username model
+        user = Username.get(Username.username == username)
+        return user.id
+    except Username.DoesNotExist:
         return None  # User not found
     
 def get_user_article_titles(user_id):
-    """Fetch all articles title written by a user."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
-    cur.execute(f"SELECT id, article_title FROM {article_table} WHERE fk_username = %s;", (user_id,))
-    articles = cur.fetchall()
-    
-    cur.close()
-    conn.close()
-    
-    return articles
+    """Fetch all article titles written by a user using Peewee."""
+    articles = Article.select(Article.id, Article.article_title).where(Article.fk_username == user_id)
+    return [(article.id, article.article_title) for article in articles]
 
 def get_user_article_body(user_id):
-    """Fetch all articles body written by a user."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
-    cur.execute(f"SELECT id, article_body FROM {article_table} WHERE fk_username = %s;", (user_id,))
-    articles = cur.fetchall()
-    
-    cur.close()
-    conn.close()
-    
-    return articles
+    """Fetch all article bodies written by a user using Peewee."""
+    articles = Article.select(Article.id, Article.article_body).where(Article.fk_username == user_id)
+    return [(article.id, article.article_body) for article in articles]
 
 def get_article_body_by_id(article_id):
-    """Fetch the body of an article by its ID."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
-    # Query to fetch the article body by article_id
-    cur.execute(f"SELECT article_body FROM {article_table} WHERE id = %s;", (article_id,))
-    result = cur.fetchone()  # Use fetchone since you expect only one result
-    
-    cur.close()
-    conn.close()
-
-    if result:
-        return result[0]  # Return the article body
-    else:
-        return None  # In case the article ID doesn't exist
+    """Fetch the body of an article by its ID using Peewee."""
+    try:
+        article = Article.get(Article.id == article_id)
+        return article.article_body
+    except Article.DoesNotExist:
+        return None  # Return None if the article doesn't exist
     
 def get_article_title_by_id(article_id):
-    """Fetch the body of an article by its ID."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
-    # Query to fetch the article body by article_id
-    cur.execute(f"SELECT article_title FROM {article_table} WHERE id = %s;", (article_id,))
-    result = cur.fetchone()  # Use fetchone since you expect only one result
-    
-    cur.close()
-    conn.close()
-
-    if result:
-        return result[0]  # Return the article body
-    else:
-        return None  # In case the article ID doesn't exist
+    """Fetch the title of an article by its ID using Peewee."""
+    try:
+        article = Article.get(Article.id == article_id)
+        return article.article_title
+    except Article.DoesNotExist:
+        return None  # Return None if the article doesn't exist
     
 def get_user_by_article_id(article_id):
-    """Fetch the username of the user who wrote the article based on the article ID."""
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    
-    cur.execute(f"""
-        SELECT u.username
-        FROM {article_table} a
-        JOIN {username_table} u ON a.fk_username = u.id
-        WHERE a.id = %s;
-    """, (article_id,))
-    
-    # Fetch the result (we expect a single row with the username)
-    user = cur.fetchone()
-    
-    cur.close()
-    conn.close()
-    
-    if user:
-        return user[0]  # Return the username
-    else:
-        return None  # Return None if no user is found
+    """Fetch the username of the user who wrote the article based on the article ID using Peewee."""
+    try:
+        article = Article.get(Article.id == article_id)
+        return article.fk_username.username  # Accessing the related user's username
+    except Article.DoesNotExist:
+        return None  # Return None if the article doesn't exist
