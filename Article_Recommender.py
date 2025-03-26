@@ -3,6 +3,7 @@ import psycopg2
 import numpy as np
 import spacy
 import re
+from peewee import *
 
 
 host = "localhost"
@@ -22,6 +23,30 @@ DB_CONFIG = {
     "host": host,
     "port": port
 }
+
+# PostgreSQL database connection
+db = PostgresqlDatabase('Article', user='user', password='admin', host='localhost', port=5432)
+
+# Define the Username model
+class Username(Model):
+    id = AutoField()  # Auto incrementing ID
+    username = CharField(unique=True)
+
+    class Meta:
+        database = db  # Define the database for this model
+
+
+# Define the Article model
+class Article(Model):
+    id = AutoField()  # Auto incrementing ID
+    fk_username = ForeignKeyField(Username, backref='articles')  # Foreign Key to 'Username' table
+    article_title = CharField()
+    article_body = TextField()
+    embedding_title = BlobField(null=True)  # Store embedding 
+    embedding_body = BlobField(null=True)   # Store embedding 
+
+    class Meta:
+        database = db  # Define the database for this model
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -185,7 +210,7 @@ def filter_relevant_articles(target_title, target_body, articles_list):
 
     # Call OpenAI API
     response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+        #model="gpt-4o-mini",
         messages=[{"role": "system", "content": "You are an intelligent article recommender."},
                   {"role": "user", "content": prompt}]
     )

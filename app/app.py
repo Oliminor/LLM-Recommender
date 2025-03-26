@@ -4,6 +4,7 @@ import openai
 import pickle
 import streamlit as st
 import torch
+import pandas as pd
 
 from urllib.error import URLError
 from redisvl.vectorize.text import HFTextVectorizer
@@ -29,6 +30,7 @@ from app.prompt import (
     format_prompt_reviews,
     get_recommended_hotel_prompt
 )
+
 from junk import (
     insert_comment,
     insert_book,
@@ -43,6 +45,13 @@ from Article_Recommender import (
     get_article_body_by_id,
     get_user_by_article_id,
     get_article_title_by_id,
+)
+
+from Drone_Picker import (
+    extract_restrictions_from_pdf,
+    uploaded_file_to_bytes,
+    search_drones,
+    search_drones_by_weight,
 )
 
 from app.constants import (
@@ -94,9 +103,131 @@ def set_city():
     
 import app.state as state
 
+def flatten_json(nested_json, parent_key='', sep='_'):
+    items = []
+    
+    # Check if the data is a dictionary
+    if isinstance(nested_json, dict):
+        for k, v in nested_json.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                # If the value is a dictionary, recursively flatten it
+                items.extend(flatten_json(v, new_key, sep=sep).items())
+            elif isinstance(v, list):
+                # If the value is a list, iterate through each item and flatten it
+                for i, elem in enumerate(v):
+                    items.extend(flatten_json({f"{i}": elem}, new_key, sep=sep).items())
+            else:
+                # If it's a scalar value, add it to the list
+                items.append((new_key, v))
+    elif isinstance(nested_json, list):
+        # If the data is a list, iterate through each item and treat each as an element
+        for i, elem in enumerate(nested_json):
+            items.extend(flatten_json({f"{i}": elem}, parent_key, sep=sep).items())
+    
+    return dict(items)
 
 def main(): 
 
+    st.markdown(
+        """
+        <style>
+            .block-container {
+                max-width: 65% !important;
+                margin: 20px;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+)
+    
+
+    uploaded_file = st.file_uploader("Upload drone regulations PDF", type="pdf")
+
+    if uploaded_file:
+        if st.button("Extract Restrictions"):
+            restrictions_data = extract_restrictions_from_pdf(uploaded_file_to_bytes(uploaded_file))
+
+            if restrictions_data:
+                st.write("✅ **Drone Restrictions Extracted**")
+
+                state.DRONE_RESTICTION_RESULT = restrictions_data             
+
+    if (state.DRONE_RESTICTION_RESULT):
+        restrictions_data = state.DRONE_RESTICTION_RESULT
+        for category, data in restrictions_data.get("drone_restrictions", {}).items():
+                    min_weight = data["minimum_weight"]
+                    max_weight = data["maximum_weight"]
+                    restrictions_list = data["restrictions"]
+
+                    # Display category info
+                    with st.expander(f"📌 {category} ({min_weight}g - {max_weight}g)"):
+                        st.write("#### 🛑 Restrictions:")
+                        flat_json = flatten_json(restrictions_list)
+                        df = pd.DataFrame([flat_json])
+                        df_vertical = df.transpose()
+                        st.dataframe(df_vertical)
+
+                            # Search button for this weight category
+                    if st.button(f"🔎 Search Drones ({min_weight}g - {max_weight}g)", key=category):
+                        state.DRONE_SEARCH_DATA = data
+                        
+                    if (state.DRONE_SEARCH_DATA == data):
+                        st.write(f"🔍 Searching drones between {min_weight}g and {max_weight}g...")
+                        
+                        # Search for matching drones
+                        drones = search_drones_by_weight(min_weight, max_weight)
+                        
+                        # Display search results
+                        if drones:
+                            # Convert query results into a list of dictionaries for display
+                            drone_data = [
+                                {
+                                    "Model": drone.drone_model,
+                                    "Weight (g)": drone.weight_g,
+                                    "Battery (mAh)": drone.battery_mah,
+                                    "Flight Time (min)": drone.flight_time_min,
+                                    "Max Range (km)": drone.max_range_km,
+                                    "Camera": drone.camera,
+                                    "Geofencing": "Yes" if drone.geofencing else "No",
+                                    "Noise (dB)": drone.noise_db,
+                                }
+                                for drone in drones
+                            ]
+
+                            st.table(drone_data)  # Displays data in a structured table
+                        else:
+                            st.write("⚠️ No drones found in this weight category.")
+                       
+
+
+    drone_name = st.text_input("Search Drone")
+
+    if st.button("Search"):
+        drones = search_drones(drone_model__contains=drone_name)
+
+        if drones:
+            # Convert query results into a list of dictionaries for display
+            drone_data = [
+                {
+                    "Model": drone.drone_model,
+                    "Weight (g)": drone.weight_g,
+                    "Battery (mAh)": drone.battery_mah,
+                    "Flight Time (min)": drone.flight_time_min,
+                    "Max Range (km)": drone.max_range_km,
+                    "Camera": drone.camera,
+                    "Geofencing": "Yes" if drone.geofencing else "No",
+                    "Noise (dB)": drone.noise_db,
+                }
+                for drone in drones
+            ]
+
+            st.table(drone_data)  # Displays data in a structured table
+        else:
+            st.warning("🚫 No drones found.")
+
+
+''' # Article Recommender
     # Streamlit UI
     st.sidebar.title("User Panel")
 
@@ -222,63 +353,6 @@ def main():
                     st.write(f"\n{article_body}")
                 else:
                     st.write("⚠️ Article body not found.")
-
-''' #Book pratice code
-    st.write("# Bence's Book practice")
-
-    st.write("## Search for a book")
-    search_title = st.text_input("Enter book title to search")
-
-    # Search button
-    if st.button("Search"):
-        state.CURRENT_STATE = state.BookAppState.DEFAULT
-        if search_title:
-            print("Search")
-            books = search_book(search_title)
-            if books:
-                print("Books")
-                state.SELECTED_BOOKS_ID = books
-                state.CURRENT_STATE = state.BookAppState.IS_BOOK_FOUND
-            else:
-                print("Else")
-                state.CURRENT_STATE = state.BookAppState.IS_NOT_FOUND
-
-
-        else:
-            st.warning("Please enter a title to search.")
-
-    if state.CURRENT_STATE == state.BookAppState.IS_BOOK_FOUND:
-        for book in state.SELECTED_BOOKS_ID:
-            col1, col2 = st.columns([3, 1])  # This defines the width ratio (3:1)
-
-            # In the first column, write some text
-            with col1:
-                st.write(f"📖 **Title:** {book[1]}")
-
-            # In the second column, place the text input box
-            with col2:
-                if st.button("Add Comment", key=f"add_comment_{book}"):
-                    state.CURRENT_STATE = state.BookAppState.IS_BOOK_SELECTED
-                    state.SELECTED_BOOK_ID = book
-                    st.rerun()
-
-    if state.CURRENT_STATE == state.BookAppState.IS_BOOK_SELECTED:
-        st.write(f"## Add Comment to the book: {state.SELECTED_BOOK_ID[1]}")
-        book_comment = st.text_input("Comment")
-        if st.button("Add Comment"):
-            insert_comment(state.SELECTED_BOOK_ID[0], book_comment)
-            st.rerun()
-
-    if state.CURRENT_STATE == state.BookAppState.IS_NOT_FOUND:
-        st.write("No books found with that title.")
-        st.write("## Add a book to the library!")
-        book_title = st.text_input("Book Title")
-        book_comment = st.text_input("Comment")
-        if st.button("Add to the library"):
-            if book_title and book_comment:  # Ensure fields are not empty
-                insert_book(book_title, book_comment)
-            else:
-                st.warning("Please fill in both fields before adding.")
 '''
 
 ''' # Hotel codes
