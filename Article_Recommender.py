@@ -3,25 +3,7 @@ import numpy as np
 import spacy
 import re
 from peewee import *
-
-
-host = "localhost"
-port = "5432"
-dbname = "Article"
-user = "user"
-password = "admin"
-
-username_table = "username"
-article_table = "article"
-
-# PostgreSQL connection settings
-DB_CONFIG = {
-    "dbname": dbname,
-    "user": user,
-    "password": password,
-    "host": host,
-    "port": port
-}
+from pgvector.peewee import VectorField
 
 # PostgreSQL database connection
 db = PostgresqlDatabase('Article', user='user', password='admin', host='localhost', port=5432)
@@ -41,8 +23,8 @@ class Article(Model):
     fk_username = ForeignKeyField(Username, backref='articles')  # Foreign Key to 'Username' table
     article_title = CharField()
     article_body = TextField()
-    embedding_title = BlobField(null=True)  # Store embedding 
-    embedding_body = BlobField(null=True)   # Store embedding 
+    embedding_title = VectorField(dimensions=3072)  # Store embedding 
+    embedding_body = VectorField(dimensions=3072)   # Store embedding 
 
     class Meta:
         database = db  # Define the database for this model
@@ -115,57 +97,68 @@ def search_similar_articles(article_id, exclude_user_id):
        Then, send the results to ChatGPT for final filtering based on relevance.
     """
     try:
-        # Fetch the target article's title, body, and embeddings
-        target_article = Article.get(Article.id == article_id)
-        
+        # Fetch target article and its embeddings
+        target_article = Article.get_or_none(Article.id == article_id)
+        if not target_article:
+            print(f"⚠️ Article ID {article_id} not found.")
+            return []
+
         target_title = target_article.article_title
         target_body = target_article.article_body
         title_embedding = target_article.embedding_title
         body_embedding = target_article.embedding_body
 
-        if not title_embedding and not body_embedding:
+        # Convert to list if valid, else set to None
+        title_embedding = title_embedding.tolist() if title_embedding is not None else None
+        body_embedding = body_embedding.tolist() if body_embedding is not None else None
+
+        # Ensure at least one valid embedding exists
+        if title_embedding is None and body_embedding is None:
             print(f"⚠️ Both title and body embeddings are missing for article ID {article_id}.")
             return []
 
-        print(f"Searching for articles similar to ID {article_id} (excluding user {exclude_user_id})...")
+        print(f"🔍 Searching for articles similar to ID {article_id} (excluding user {exclude_user_id})...")
 
-        # Query to fetch similar articles based on title and body embeddings using pgvector extension for vector similarity
+        # Query articles similar based on embeddings using pgvector
         similar_articles = (
             Article.select(
                 Article.id,
                 Article.article_title,
                 Article.article_body,
-                # Using cosine_distance for similarity
-                (1 - Article.embedding_title.cosine_distance(title_embedding)).alias('title_similarity'),
-                (1 - Article.embedding_body.cosine_distance(body_embedding)).alias('body_similarity')
+                (1 - Article.embedding_title.cosine_distance(title_embedding)).alias("title_similarity"),
+                (1 - Article.embedding_body.cosine_distance(body_embedding)).alias("body_similarity"),
             )
-            .join(Username)  # Joining with the Username table
-            .where((Article.fk_username != exclude_user_id) & 
-                   (Article.embedding_title.is_null(False) & Article.embedding_body.is_null(False)))
-            .order_by(SQL('title_similarity + body_similarity').desc())  # Sorting by total similarity
+            .where(
+                (Article.fk_username != exclude_user_id) &
+                (Article.embedding_title.is_null(False)) & (Article.embedding_body.is_null(False))
+            )
+            .order_by(
+                ((1 - Article.embedding_title.cosine_distance(title_embedding)) + 
+                 (1 - Article.embedding_body.cosine_distance(body_embedding))).desc()
+            )
             .limit(5)
         )
 
-        # Prepare the articles list with similarity scores
-        articles_list = []
-        for article in similar_articles:
-            articles_list.append({
+        # Convert query results to a list
+        articles_list = [
+            {
                 "id": article.id,
                 "title": article.article_title,
                 "body": article.article_body,
                 "title_similarity": article.title_similarity,
-                "body_similarity": article.body_similarity
-            })
+                "body_similarity": article.body_similarity,
+            }
+            for article in similar_articles
+        ]
 
         if not articles_list:
             print(f"⚠️ No similar articles found for article ID {article_id}.")
             return []
 
-        # Send articles to ChatGPT for filtering
         return filter_relevant_articles(target_title, target_body, articles_list)
 
-    except Article.DoesNotExist:
-        print(f"⚠️ Article ID {article_id} does not exist.")
+    except Exception as e:
+        print(f"❌ Error while searching for similar articles: {e}")
         return []
 
 def filter_relevant_articles(target_title, target_body, articles_list):
