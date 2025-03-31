@@ -5,21 +5,13 @@ import json
 from peewee import *
 from typing import Optional, Dict, List
 
-# Database configuration
-host = "localhost"
-port = "5432"
-dbname = "Drone"
-user = "user"
-password = "admin"
-drones_table = "drones"
-
 # Initialize PostgreSQL database connection
 db = PostgresqlDatabase(
-    dbname,
-    user=user,
-    password=password,
-    host=host,
-    port=port
+    "Drone",
+    user="user",
+    password="admin",
+    host="localhost",
+    port=5432
 )
 
 class Drone(Model):
@@ -35,7 +27,7 @@ class Drone(Model):
     
     class Meta:
         database = db
-        table_name = drones_table
+        table_name = "drones"
 
 from peewee import *
 

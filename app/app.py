@@ -5,6 +5,7 @@ import pickle
 import streamlit as st
 import torch
 import pandas as pd
+import requests
 
 from urllib.error import URLError
 from redisvl.vectorize.text import HFTextVectorizer
@@ -31,11 +32,6 @@ from app.prompt import (
     get_recommended_hotel_prompt
 )
 
-from junk import (
-    insert_comment,
-    insert_book,
-    search_book
-)
 
 from Article_Recommender import (
     add_article,
@@ -44,7 +40,6 @@ from Article_Recommender import (
     search_similar_articles,
     get_article_body_by_id,
     get_user_by_article_id,
-    get_article_title_by_id,
 )
 
 from Drone_Picker import (
@@ -127,9 +122,37 @@ def flatten_json(nested_json, parent_key='', sep='_'):
     
     return dict(items)
 
+
+# API Base URL (Change this if running on a different server)
+API_BASE_URL = "http://127.0.0.1:8000"
+
+def get_user_id(username):
+    response = requests.get(f"{API_BASE_URL}/get_user_id", params={"username": username})
+    return response.json() if response.status_code == 200 else None
+
+def add_article(username, article_title, article_body):
+    response = requests.get(f"{API_BASE_URL}/add_article", 
+                            params={"username": username, "article_title": article_title, "article_body": article_body})
+    return response.text if response.status_code == 200 else "Error adding article"
+
+def get_user_articles(user_id):
+    response = requests.get(f"{API_BASE_URL}/get_user_article_titles", params={"user_id": user_id})
+    return response.json() if response.status_code == 200 else []
+
+def get_article_body(article_id):
+    response = requests.get(f"{API_BASE_URL}/get_article_body_by_id", params={"article_id": article_id})
+    return response.text if response.status_code == 200 else "Article not found"
+
+def get_similar_articles(article_id, exclude_user_id):
+    response = requests.get(f"{API_BASE_URL}/search_similar_articles", params={"article_id": article_id, "exclude_user_id": exclude_user_id})
+    return response.json() if response.status_code == 200 else []
+
+def get_author_by_article(article_id):
+    response = requests.get(f"{API_BASE_URL}/get_user_by_article_id", params={"article_id": article_id})
+    return response.text if response.status_code == 200 else "Unknown"
+
+
 def main(): 
-# Article Recommender
-    # Streamlit UI
     st.sidebar.title("User Panel")
 
     # Input for username at the top of the sidebar

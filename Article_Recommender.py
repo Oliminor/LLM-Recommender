@@ -4,6 +4,9 @@ import spacy
 import re
 from peewee import *
 from pgvector.peewee import VectorField
+from fastapi import FastAPI
+
+app = FastAPI()
 
 # PostgreSQL database connection
 db = PostgresqlDatabase('Article', user='user', password='admin', host='localhost', port=5432)
@@ -30,6 +33,10 @@ class Article(Model):
         database = db  # Define the database for this model
 
 nlp = spacy.load("en_core_web_sm")
+
+@app.get("/")
+def home():
+    return {"message": "API is running"}
 
 def get_openai_embedding(text):
     """Generate embedding for a given text using OpenAI API."""
@@ -91,7 +98,7 @@ def vectorize_all_articles():
 
     print(f"✅ Processed and stored {len(articles)} article embeddings.")
 
-
+@app.get("/search_similar_articles")
 def search_similar_articles(article_id, exclude_user_id):
     """Search for articles similar to a given article by title and body separately while ignoring articles from a specific user.
        Then, send the results to ChatGPT for final filtering based on relevance.
@@ -203,6 +210,7 @@ def filter_relevant_articles(target_title, target_body, articles_list):
     return filtered_articles  # ✅ Returns a correctly formatted list
 
 
+@app.get("/add_article")
 def add_article(username, article_title, article_body):
     """Add a new article to the database. If the user does not exist, add them first."""
     # Check if the user exists using Peewee ORM
@@ -227,6 +235,7 @@ def add_article(username, article_title, article_body):
     return f"✅ Article '{article_title}' added successfully with embeddings!"
 
 
+@app.get("/get_user_id")
 def get_user_id(username):
     """Fetch user ID based on the provided username using Peewee."""
     try:
@@ -235,17 +244,20 @@ def get_user_id(username):
         return user.id
     except Username.DoesNotExist:
         return None  # User not found
-    
+
+@app.get("/get_user_article_titles")    
 def get_user_article_titles(user_id):
     """Fetch all article titles written by a user using Peewee."""
     articles = Article.select(Article.id, Article.article_title).where(Article.fk_username == user_id)
     return [(article.id, article.article_title) for article in articles]
 
+@app.get("/get_user_article_body")
 def get_user_article_body(user_id):
     """Fetch all article bodies written by a user using Peewee."""
     articles = Article.select(Article.id, Article.article_body).where(Article.fk_username == user_id)
     return [(article.id, article.article_body) for article in articles]
 
+@app.get("/get_article_body_by_id")
 def get_article_body_by_id(article_id):
     """Fetch the body of an article by its ID using Peewee."""
     try:
@@ -253,7 +265,8 @@ def get_article_body_by_id(article_id):
         return article.article_body
     except Article.DoesNotExist:
         return None  # Return None if the article doesn't exist
-    
+
+@app.get("/get_article_title_by_id")    
 def get_article_title_by_id(article_id):
     """Fetch the title of an article by its ID using Peewee."""
     try:
@@ -261,7 +274,8 @@ def get_article_title_by_id(article_id):
         return article.article_title
     except Article.DoesNotExist:
         return None  # Return None if the article doesn't exist
-    
+
+@app.get("/get_user_by_article_id")    
 def get_user_by_article_id(article_id):
     """Fetch the username of the user who wrote the article based on the article ID using Peewee."""
     try:
