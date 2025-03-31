@@ -173,7 +173,7 @@ def filter_relevant_articles(target_title, target_body, articles_list):
     
     # Construct the prompt
     prompt = f"""
-    You are an AI that helps recommend the most relevant articles based on a target article. 
+    You are an AI that helps recommend relevant articles based on a target article. 
 
     The target article:
     - Title: "{target_title}"
@@ -183,7 +183,7 @@ def filter_relevant_articles(target_title, target_body, articles_list):
 
     {''.join([f"- ID: {a['id']}, Title: \"{a['title']}\"\n  Content: \"{a['body'][:300]}...\"\n\n" for a in articles_list])}
 
-    Please select the top maximum 3 most relevant articles (could be less) based on content similarity and conceptual alignment with the target article.
+    Please select the top maximum 3 relevant articles (could be less) based on content similarity and conceptual alignment with the target article.
     Return the article IDs and their Titles in the following format:
 
     - ID: <article_id>, Title: "<article_title>"

@@ -32,7 +32,7 @@ from app.prompt import (
     get_recommended_hotel_prompt
 )
 
-
+'''
 from Article_Recommender import (
     add_article,
     get_user_id,
@@ -41,6 +41,7 @@ from Article_Recommender import (
     get_article_body_by_id,
     get_user_by_article_id,
 )
+'''
 
 from Drone_Picker import (
     extract_restrictions_from_pdf,
@@ -192,7 +193,7 @@ def main():
             if not user_id:
                 st.write("❌ Username not found")  
             else:    
-                articles = get_user_article_titles(user_id)
+                articles = get_user_articles(user_id)
                 if not articles:
                     st.write("❌ Article(s) not found")
                 else:
@@ -206,7 +207,7 @@ def main():
                         article_id, article_title = article  # Unpack the tuple into id and title
 
                         # Use the article_id in the search_similar_articles function
-                        similar_articles = search_similar_articles(article_id, user_id)
+                        similar_articles = get_similar_articles(article_id, user_id)
 
                         if not hasattr(state, 'SIMILAR_ARTICLES'):
                             state.SIMILAR_ARTICLES = {}
@@ -240,7 +241,7 @@ def main():
 
                         with col1:
                             # Display the similar article title and the author's username
-                            st.write(f"**Similar article title:** {similar_article['title']} - {get_user_by_article_id(similar_article['id'])}")
+                            st.write(f"**Similar article title:** {similar_article['title']} - {get_author_by_article(similar_article['id'])}")
 
                         with col2:
                             # Create a button to read the full article with a unique key
@@ -248,7 +249,7 @@ def main():
                                 state.SELECTED_ARTICLE = similar_article['id']
                                 
                         if (similar_article['id'] == state.SELECTED_ARTICLE):
-                            article_body = get_article_body_by_id(similar_article['id'])
+                            article_body = get_article_body(similar_article['id'])
                             st.write(f"\n{article_body}")
                         
                 else:
@@ -259,7 +260,7 @@ def main():
     if state.ArticleState == state.ArticleState.MY_ARTICLES:
         st.title("My Articles")
 
-        articles = get_user_article_titles(user_id)  # Fetch user article titles (id, title)
+        articles = get_user_articles(user_id)  # Fetch user article titles (id, title)
 
         for i, article in enumerate(articles):  # Use enumerate to get index of the article
             article_id, article_title = article  # Unpack the tuple into id and title
@@ -270,7 +271,7 @@ def main():
             # Create a button for each article
             if st.button(f"Expand", key=article_id):
                 # Fetch the article body using the article ID
-                article_body = get_article_body_by_id(article_id)  # Fetch the body by article_id
+                article_body = get_article_body(article_id)  # Fetch the body by article_id
                 
                 # Display the article body under the title when the button is clicked
                 if article_body:
