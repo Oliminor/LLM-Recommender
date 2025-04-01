@@ -44,10 +44,8 @@ from Article_Recommender import (
 '''
 
 from Drone_Picker import (
-    extract_restrictions_from_pdf,
+    search_drones_with_ai,
     uploaded_file_to_bytes,
-    search_drones,
-    search_drones_by_weight,
 )
 
 from app.constants import (
@@ -154,130 +152,32 @@ def get_author_by_article(article_id):
 
 
 def main(): 
-    st.sidebar.title("User Panel")
+    st.markdown(
+        """
+        <style>
+            .block-container {
+                max-width: 65% !important;
+                margin: 20px;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+)
+    
 
-    # Input for username at the top of the sidebar
-    username = st.sidebar.text_input("Enter your username")
-    user_id = get_user_id(username)
+    uploaded_file = st.file_uploader("Upload drone regulations PDF", type="pdf")
 
-    # Button to toggle article submission panel
-    if st.sidebar.button("➕ Add New Article"):
-        state.ArticleState = state.ArticleState.ADD_ARTICLE
+    if uploaded_file:
+        if st.button("Turn PDF into Text"):
+            text_data = uploaded_file_to_bytes(uploaded_file)
 
-    if st.sidebar.button("Recommend Articles"):
-        state.ArticleState = state.ArticleState.RECOMMEND_ARTICLE
+    prompt_text = st.text_area("Enter your prompt")
 
-    if st.sidebar.button("My Articles"):
-        state.ArticleState = state.ArticleState.MY_ARTICLES
+    if st.button("Apply"):
+        st.write(search_drones_with_ai(prompt_text))
 
-    # Article submission form in the main area
-    if state.ArticleState == state.ArticleState.ADD_ARTICLE:
-        st.title("📝 Add a New Article")
+# Find all drones with a payload weight greater than 1000g
 
-        article_title = st.text_input("Article Title")
-        article_body = st.text_area("Article Body")
-
-        if st.button("Submit Article"):
-            if username and article_title and article_body:
-                message = add_article(username, article_title, article_body)
-                st.success(message)
-                st.session_state["show_form"] = False  # Hide form after submission
-            else:
-                st.error("❌ Please fill in all fields before submitting.")
-
-    # Article recommender
-    if state.ArticleState == state.ArticleState.RECOMMEND_ARTICLE:
-        if st.button("Recommend Article"):
-            state.SELECTED_ARTICLE = 0
-
-            if not user_id:
-                st.write("❌ Username not found")  
-            else:    
-                articles = get_user_articles(user_id)
-                if not articles:
-                    st.write("❌ Article(s) not found")
-                else:
-                   # Sort user's articles by article_id in descending order and select the latest 3
-                    latest_articles = sorted(articles, key=lambda x: x[0], reverse=True)[:3]
-
-                    state.MY_ARTICLE_TITLES = latest_articles
-
-                    # Iterate over the latest 3 articles and fetch similar articles
-                    for i, article in enumerate(latest_articles):
-                        article_id, article_title = article  # Unpack the tuple into id and title
-
-                        # Use the article_id in the search_similar_articles function
-                        similar_articles = get_similar_articles(article_id, user_id)
-
-                        if not hasattr(state, 'SIMILAR_ARTICLES'):
-                            state.SIMILAR_ARTICLES = {}
-
-                        # Save the entire list of similar articles in state.SIMILAR_ARTICLES
-                        state.SIMILAR_ARTICLES[article_id] = similar_articles  # Storing the whole array under article_id
-
-        if state.MY_ARTICLE_TITLES is not None:
-
-            state.SELECTED_ARTICLE = 0
-
-            for i, article in enumerate(state.MY_ARTICLE_TITLES):
-                # Unpack the article to get its title
-                article_id, article_title = article
-
-                # Print the article title
-                st.write(f"##### Article title: {article_title}")
-
-                # Get similar articles for the current article
-                similar_articles = state.SIMILAR_ARTICLES.get(article_id, [])
-
-                if not similar_articles:    
-                    st.write("⚠️ No similar articles found.")
-                elif isinstance(similar_articles, list) and isinstance(similar_articles[0], dict):
-                    for similar_article in similar_articles:
-                        # Ensure each button has a unique key by using both article_id and similar_article['id']
-                        button_key = f"{article_id}_{similar_article['id']}"
-
-                        # Create two columns: one for the title and one for the button
-                        col1, col2 = st.columns([3, 1])  # Adjust column widths (3 for title, 1 for the button)
-
-                        with col1:
-                            # Display the similar article title and the author's username
-                            st.write(f"**Similar article title:** {similar_article['title']} - {get_author_by_article(similar_article['id'])}")
-
-                        with col2:
-                            # Create a button to read the full article with a unique key
-                            if st.button(f"Read Article", key=button_key):
-                                state.SELECTED_ARTICLE = similar_article['id']
-                                
-                        if (similar_article['id'] == state.SELECTED_ARTICLE):
-                            article_body = get_article_body(similar_article['id'])
-                            st.write(f"\n{article_body}")
-                        
-                else:
-                    st.write("⚠️ Unexpected format for similar_articles.")
-
-
-
-    if state.ArticleState == state.ArticleState.MY_ARTICLES:
-        st.title("My Articles")
-
-        articles = get_user_articles(user_id)  # Fetch user article titles (id, title)
-
-        for i, article in enumerate(articles):  # Use enumerate to get index of the article
-            article_id, article_title = article  # Unpack the tuple into id and title
-
-            # Display the article title
-            st.write(f"**Article title:** {article_title}")
-
-            # Create a button for each article
-            if st.button(f"Expand", key=article_id):
-                # Fetch the article body using the article ID
-                article_body = get_article_body(article_id)  # Fetch the body by article_id
-                
-                # Display the article body under the title when the button is clicked
-                if article_body:
-                    st.write(f"\n{article_body}")
-                else:
-                    st.write("⚠️ Article body not found.")
 
 ''' # Drone Picket
     st.markdown(

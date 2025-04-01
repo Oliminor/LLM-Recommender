@@ -1,10 +1,17 @@
 import openai
 import numpy as np
 import spacy
+import os
 import re
 from peewee import *
 from pgvector.peewee import VectorField
 from fastapi import FastAPI
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+model_name = os.getenv("OPENAI_CHAT_MODEL")
 
 app = FastAPI()
 
@@ -193,7 +200,7 @@ def filter_relevant_articles(target_title, target_body, articles_list):
 
     # Call OpenAI API
     response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+        model=model_name,
         messages=[{"role": "system", "content": "You are an intelligent article recommender."},
                   {"role": "user", "content": prompt}]
     )

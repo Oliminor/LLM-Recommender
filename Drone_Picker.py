@@ -1,9 +1,16 @@
 import openai
 import PyPDF2
+import os
 import io
 import json
 from peewee import *
 from typing import Optional, Dict, List
+from dotenv import load_dotenv
+from playhouse.postgres_ext import ArrayField
+
+load_dotenv()
+
+model_name = os.getenv("OPENAI_CHAT_MODEL")
 
 # Initialize PostgreSQL database connection
 db = PostgresqlDatabase(
@@ -14,72 +21,37 @@ db = PostgresqlDatabase(
     port=5432
 )
 
-class Drone(Model):
-    # Note: Peewee automatically adds an auto-incrementing 'id' primary key
-    drone_model = CharField(max_length=100)
-    weight_g = IntegerField()
-    battery_mah = IntegerField(null=True)  # Allows NULL values
-    flight_time_min = IntegerField(null=True)
-    max_range_km = DecimalField(max_digits=5, decimal_places=1, null=True)
-    camera = CharField(max_length=100, null=True)
-    geofencing = BooleanField(default=False)
-    noise_db = IntegerField(null=True)
-    
+class BaseModel(Model):
     class Meta:
         database = db
+
+class Drone(BaseModel):
+    drone_model = TextField(null=False)
+    weight_g = IntegerField()
+    battery_mah = IntegerField(null=True)
+    flight_time_min = IntegerField(null=True)
+    max_range_km = DecimalField(max_digits=5, decimal_places=1, null=True)
+    camera = TextField(null=True)
+    geofencing = BooleanField(default=False)
+    noise_db = IntegerField(null=True)
+    max_height_km = DoubleField(null=True)  # double precision
+    payload_weight_g = IntegerField(null=True)
+    description = TextField(null=True)
+
+    class Meta:
         table_name = "drones"
 
-from peewee import *
+class Location(BaseModel):
+    name = CharField(max_length=100, unique=True)
+    coordinates = ArrayField(DoubleField)  # Stores [latitude, longitude]
 
-def search_drones(**filters):
-    """
-    Search for drones using dynamic filters.
-    You can pass in multiple keyword arguments to filter by specific fields.
+class DronesLocation(BaseModel):
+    fk_location_id = ForeignKeyField(Location, backref="drones", on_delete="CASCADE")
+    fk_drones_id = ForeignKeyField(Drone, backref="locations", on_delete="CASCADE")
 
-    Example usage:
-    - search_drones(drone_model="DJI")  # Search by model name
-    - search_drones(weight_g__gte=500, weight_g__lte=1500)  # Search by weight range
-    - search_drones(flight_time_min__gte=20)  # Search by minimum flight time
-    - search_drones(camera="4K")  # Search by camera type
-    """
+    class Meta:
+        table_name = "drones_location"  
 
-    query = Drone.select()
-
-    for key, value in filters.items():
-        if "__" in key:
-            field, operation = key.split("__", 1)
-
-            # Get the field from the model
-            field_attr = getattr(Drone, field, None)
-            if not field_attr:
-                raise ValueError(f"Invalid field: {field}")
-
-            # Mapping operations to Peewee filters
-            operations = {
-                "gte": field_attr >= value,  # Greater than or equal to
-                "lte": field_attr <= value,  # Less than or equal to
-                "gt": field_attr > value,  # Greater than
-                "lt": field_attr < value,  # Less than
-                "contains": field_attr.contains(value),  # Case-insensitive search
-                "exact": field_attr == value,  # Exact match
-            }
-
-            if operation not in operations:
-                raise ValueError(f"Invalid operation: {operation}")
-
-            query = query.where(operations[operation])
-        else:
-            field_attr = getattr(Drone, key, None)
-            if not field_attr:
-                raise ValueError(f"Invalid field: {key}")
-
-            query = query.where(field_attr == value)
-
-    return list(query)
-
-def search_drones_by_weight(min_weight: int, max_weight: int) -> List[Drone]:
-    """Search for drones within a specific weight range."""
-    return Drone.select().where((Drone.weight_g >= min_weight) & (Drone.weight_g <= max_weight))
 
 def uploaded_file_to_bytes(uploaded_file) -> bytes:
     """Convert Streamlit UploadedFile to bytes"""
@@ -94,36 +66,50 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
             text += page.extract_text() + "\n"
     return text
 
-def extract_restrictions_from_pdf(pdf_bytes: bytes) -> Dict[str, List[str]]:
-    """
-    Extracts drone restrictions from PDF bytes using OpenAI's API.
-    Uses your existing function with proper bytes conversion.
-    """
-    text = extract_text_from_pdf(pdf_bytes)
-    
+def generate_sql_from_natural_query(user_query: str) -> str:
+    """Generate an SQL query using OpenAI based on natural language input"""
     response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+        model=model_name,
         messages=[
-            {"role": "system", "content": """
-             You are an expert in drone regulations. Extract all drone model restrictions 
-             from the provided text and return as JSON.
-
-             if there are weight specific requirement, please returns with in gram and the number only and state the minimum and maximum weight limit in that category
-             example: if under 25 kg it should return minimum 0, maximum 25000
-
-             return back with every restrictions per category
-             the restrictions should be separated by wieght class category
-             if possible, must figure out the minimum weight limit based on the other weight categories, if not just use 0
-             every restriction should be listed out per weight category
-             if a restriction true for multiple category, should be listed on those category
-             """},
-            {"role": "user", "content": text[:15000]}
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.3
+            {"role": "system", "content": "You are an expert SQL assistant with knowledge of a drones database."},
+            {"role": "system", "content": "The 'drones' table has a column 'drone_model' that represent the drone name character VARCHAR and should be drone_model IS NOT NULL AND drone_model LIKE."},
+            {"role": "system", "content": "The 'drones' table has a column 'weight_g' for drone weight in grams."},
+            {"role": "system", "content": "The 'drones' table has a column 'payload_weight_g' for payload weight in grams."},
+            {"role": "system", "content": "The 'drones' table has a column 'battery_mah' for battery in mah."},
+            {"role": "system", "content": "The 'drones' table has a column 'flight_time_min' for flight time in minutes."},
+            {"role": "system", "content": "The 'drones' table has a column 'max_range_km' for flight distance in kilometer."},
+            {"role": "system", "content": "The 'drones' table has a column 'camera' for camera type and resolution in character VARCHAR and should be camera IS NOT NULL AND camera LIKE"},
+            {"role": "system", "content": "The 'drones' table has a column 'noise_db' for noise volume in decibel."},
+            {"role": "system", "content": "The 'drones' table has a column 'max_height_km' for max flight height in kilometer."},
+            {"role": "system", "content": "The 'drones' table has a column 'max_height_km' for max flight height in kilometer."},
+            {"role": "user", "content": f"Convert the following natural language query into a SQL query for a PostgreSQL database. Only return the SQL query with no explanation or additional (SQL: ```sql) text: {user_query}"}
+        ]
     )
-    
+
+    generated_sql = response["choices"][0]["message"]["content"]
+    print("Generated SQL:", generated_sql)  # Print generated SQL
+    return generated_sql
+
+def execute_sql_query(sql_query: str):
+    """Executes a raw SQL query using Peewee and returns the results."""
     try:
-        return json.loads(response.choices[0].message.content)
-    except json.JSONDecodeError:
-        return {"error": "Failed to parse restrictions"}
+        cursor = db.cursor()  # Get a cursor explicitly from the db object
+        cursor.execute(sql_query)  # Use cursor's execute method
+        results_list = cursor.fetchall()  # Fetch results
+
+        return results_list
+    except Exception as e:
+        print(f"SQL Execution Error: {e}")
+        return None
+    finally:
+        cursor.close()  # Make sure to close the cursor
+    
+def search_drones_with_ai(user_query: str):
+    """Search drones based on user natural language query"""
+    sql_query = generate_sql_from_natural_query(user_query)
+    results = execute_sql_query(sql_query)
+
+    if results:
+        return results
+    else:
+        print("No results found or query failed.")
