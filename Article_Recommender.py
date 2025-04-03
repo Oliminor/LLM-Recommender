@@ -6,8 +6,9 @@ import re
 from peewee import *
 from pgvector.peewee import VectorField
 from fastapi import FastAPI
-
 from dotenv import load_dotenv
+
+#uvicorn Article_Recommender:app --host 127.0.0.1 --port 8000 --reload
 
 load_dotenv()
 

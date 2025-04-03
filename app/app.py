@@ -97,6 +97,8 @@ def set_city():
     
 import app.state as state
 
+# region API calls and functions for the Article
+
 def flatten_json(nested_json, parent_key='', sep='_'):
     items = []
     
@@ -150,6 +152,7 @@ def get_author_by_article(article_id):
     response = requests.get(f"{API_BASE_URL}/get_user_by_article_id", params={"article_id": article_id})
     return response.text if response.status_code == 200 else "Unknown"
 
+# endregion
 
 def main(): 
     st.markdown(
@@ -174,7 +177,18 @@ def main():
     prompt_text = st.text_area("Enter your prompt")
 
     if st.button("Apply"):
-        st.write(search_drones_with_ai(prompt_text))
+        results = search_drones_with_ai(prompt_text)
+
+        if results:
+            df = pd.DataFrame(results)
+
+            columns_to_remove = ["id"]
+            df = df.drop(columns=columns_to_remove, errors="ignore")  # Ignore if not found
+
+            st.dataframe(df.style.set_table_styles(
+                [{'selector': 'th', 'props': [('max-width', '150px')]},  # Header max width
+                {'selector': 'td', 'props': [('max-width', '150px')]}]  # Cell max width
+            ))
 
 # Find all drones with a payload weight greater than 1000g
 
