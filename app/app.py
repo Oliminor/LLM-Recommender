@@ -46,6 +46,8 @@ from Article_Recommender import (
 from Drone_Picker import (
     search_drones_with_ai,
     uploaded_file_to_bytes,
+    extract_text_from_pdf,
+    generate_response_from_natural_query,
 )
 
 from app.constants import (
@@ -172,23 +174,45 @@ def main():
 
     if uploaded_file:
         if st.button("Turn PDF into Text"):
-            text_data = uploaded_file_to_bytes(uploaded_file)
+            text_data = extract_text_from_pdf(uploaded_file_to_bytes(uploaded_file))
+            if (text_data is not None):
+                state.DRONE_PDF_TEXT = text_data
+                st.success("PDF turned into text")
+
 
     prompt_text = st.text_area("Enter your prompt")
 
     if st.button("Apply"):
-        results = search_drones_with_ai(prompt_text)
+        results = generate_response_from_natural_query(prompt_text, state.DRONE_PDF_TEXT)
+    
+        # Separate SQL query and text response
+        text_response = results.get("text_response")  # Get textual response (if any)
+        sql_query = results.get("sql_query")  # Get SQL query (if any)        
+        additional_data_needed = results.get("needs_additional_data")
 
-        if results:
-            df = pd.DataFrame(results)
+        st.write(additional_data_needed)
 
-            columns_to_remove = ["id"]
-            df = df.drop(columns=columns_to_remove, errors="ignore")  # Ignore if not found
+        # Display text response if available
+        if text_response:
+            st.subheader("Text Response")
+            st.write(text_response)
 
-            st.dataframe(df.style.set_table_styles(
-                [{'selector': 'th', 'props': [('max-width', '150px')]},  # Header max width
-                {'selector': 'td', 'props': [('max-width', '150px')]}]  # Cell max width
-            ))
+        # Display SQL query if available
+        if sql_query:
+            st.subheader("Generated SQL Query")
+            st.code(sql_query, language="sql")
+
+            # Execute SQL query and show results in table
+            query_results = search_drones_with_ai(sql_query)  # Run SQL query
+            if query_results:
+                df = pd.DataFrame(query_results)  # Convert results to DataFrame
+                st.subheader("SQL Query Results")
+                st.dataframe(df.style.set_table_styles([
+                    {"selector": "th", "props": [("max-width", "150px")]},
+                    {"selector": "td", "props": [("max-width", "150px")]}
+                ]))  # Apply styles
+            else:
+                st.write("No results found.")
 
 # Find all drones with a payload weight greater than 1000g
 
