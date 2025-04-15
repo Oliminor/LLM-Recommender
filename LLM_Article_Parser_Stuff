@@ -1,0 +1,234 @@
+import os
+import csv
+import zipfile
+import gzip
+import json
+import re
+import argparse
+from openai import OpenAI
+from bs4 import BeautifulSoup
+from langdetect import detect, LangDetectException
+from newspaper import Article
+
+# Load your model name from environment or hardcode it here
+model_name = os.getenv("OPENAI_CHAT_MODEL")  # Default to gpt-4 if not set
+
+# Output CSV and fields
+output_file = "articles_Newspaper3k.csv"
+fields = ["title", "author", "date", "body"]
+zip_file_path = r"D:\Download\3DLNews-2.0-HTML.zip" 
+
+# Counters and limits
+article_counter = 0
+failed_article_counter = 0
+max_articles = 10  # Adjust as needed
+
+def process_html(raw_html):
+    """Extract article data from HTML using newspaper3k"""
+    article = Article("")  # Empty URL since we're using raw HTML
+    try:
+        article.download(input_html=raw_html)
+        article.parse()
+        return {
+            "title": article.title,
+            "author": ", ".join(article.authors) if article.authors else "",
+            "date": str(article.publish_date) if article.publish_date else "",
+            "body": article.text
+        }
+    except Exception as e:
+        print(f"❌ Article parsing failed: {str(e)}")
+        return None
+
+def process_zip(zip_file_path, output_file, max_articles):
+    """Process a zip file containing gzipped HTML files"""
+    fields = ["title", "author", "date", "body"]
+    article_counter = 0
+    failed_article_counter = 0
+
+    with open(output_file, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fields)
+        writer.writeheader()
+        
+        with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
+            for filename in zip_ref.namelist():
+                if article_counter >= max_articles:
+                    break
+                    
+                if filename.endswith(".html.gz"):
+                    try:
+                        with zip_ref.open(filename) as gz_file:
+                            with gzip.GzipFile(fileobj=gz_file) as f:
+                                raw_html = f.read().decode("utf-8", errors="ignore")
+                                
+                                article_data = process_html(raw_html)
+                                if article_data:
+                                    writer.writerow(article_data)
+                                    article_counter += 1
+                                    print(f"✅ Processed {filename} ({article_counter}/{max_articles})")
+                                else:
+                                    failed_article_counter += 1
+                    except Exception as e:
+                        failed_article_counter += 1
+                        print(f"❌ Failed to process {filename}: {str(e)}")
+
+    return article_counter, failed_article_counter
+    
+def detect_language(text):
+    try:
+        # Detect language and return it
+        return detect(text)
+    except LangDetectException:
+        # If the language detection fails, assume it's not English
+        return "unknown"
+
+def sanitize_json(response_content):
+    """
+    Extracts and sanitizes the first valid JSON object from the response.
+    """
+    response_content = response_content.strip()
+
+    # Try to extract the first {...} JSON block using regex
+    json_match = re.search(r'\{[\s\S]*?\}', response_content)
+    if json_match:
+        json_block = json_match.group(0)
+
+        # Remove any trailing commas before closing braces or brackets
+        json_block = re.sub(r',\s*(\}|\])', r'\1', json_block)
+        
+        # Further cleanup for common JSON issues:
+        # Remove extra newlines, unnecessary spaces, or other stray characters
+        json_block = json_block.replace("\n", "").replace("\r", "").strip()
+
+        return json_block
+    else:
+        raise ValueError("No valid JSON object found in response.")
+
+def process_html_files_from_zip(zip_file_path, csv_writer):
+    global article_counter, failed_article_counter
+    client = OpenAI()
+
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+        for filename in zip_ref.namelist():
+            if filename.endswith(".html.gz"):
+                with zip_ref.open(filename) as gz_file:
+                    with gzip.GzipFile(fileobj=gz_file) as f:
+                        try:
+                            raw_html = f.read().decode('utf-8', errors='ignore')
+                        except Exception as e:
+                            print(f"❌ Failed to read or decode {filename}: {e}")
+                            continue
+
+                        
+                        soup = BeautifulSoup(raw_html, "html.parser")
+                        text_content = soup.body.get_text()
+
+                        print(f"📄 Processing file: {filename}")
+
+                        prompt = f"""
+                        file name: {filename}
+
+                        You are tasked with extracting the following information from the article:
+                        - The text data is from parsed HTML, some words might part of the user interface, ads or recommended articles, ignore those texts, only includes sentences 
+                          that are make sense for the article.
+
+                        - Title: The article's headline.
+                        - Author: The name(s) of the author(s).
+                        - Date: The full publication date, mind the context. Try to find word around the data like "updated", "posted", "edited", "published" to get the correct date. If the date is written in a format other than "Year, Month, Day", convert it into the correct format ("YYYY/MM/DD"). The file name contanins the year it extracted, use that find the right publisihng date.
+                        - Body: The full text that related to the article
+
+                        - fix typos and words that might merged together after cleaning the HTML file
+                        - only start new line if new paragraph starts in the body
+                        - mind that the final content is JSON and saved as CSV file, so the format should work with that
+                        - if you find any " int the article changed into “
+
+                        Article content:
+                        {text_content}
+
+                        Format your response as a JSON:
+                        {{
+                            "title": "...",  
+                            "author": "...",  
+                            "date": "...",    
+                            "body": "..."
+                        }}
+                        """
+
+                        try:
+                            response = client.chat.completions.create(
+                                model=model_name,
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0.5,
+                            )
+                            response_content = response.choices[0].message.content
+
+                            # Optional: see what came back
+                            #print("🔍 Raw response snippet:")
+                            #print(response_content[:800])
+
+                            if response_content:
+                                try:
+                                    cleaned = sanitize_json(response_content)
+                                    data = json.loads(cleaned)
+
+                                    title = data.get("title", "").strip()
+                                    body = data.get("body", "").strip()
+
+                                    language = detect_language(body)
+
+                                    if language != "en":
+                                        body = "Not English"  # Replace body with "Not English" if it's not in English
+
+                                    if title and body and len(body) >= 400:
+                                        csv_writer.writerow(data)
+                                        article_counter += 1
+                                        print(f"✅ Article {article_counter} saved.")
+                                        if article_counter >= max_articles:
+                                            print(f"✅ Reached limit of {max_articles} articles.")
+                                            return
+                                    else:
+                                        failed_article_counter += 1
+                                        print(f"⚠️ Missing title or body / too short / non-English article in {filename}, skipped.")
+                                except json.JSONDecodeError as e:
+                                    failed_article_counter += 1
+                                    print(f"❌ JSON error in {filename}: {e}")
+                                    with open("bad_responses.log", "a", encoding="utf-8") as log_file:
+                                        log_file.write(f"\n\nFile: {filename}\n---\n{response_content}\n---\n")
+                                    continue
+                            else:
+                                failed_article_counter += 1
+                                print(f"⚠️ No content in OpenAI response for {filename}, skipped.")
+                        except Exception as e:
+                            failed_article_counter += 1
+                            print(f"❌ OpenAI API exception for {filename}: {e}")
+                            continue
+
+def main():
+    with open(output_file, mode="w", newline='', encoding="utf-8-sig") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fields)
+        writer.writeheader()
+        process_html_files_from_zip(zip_file_path, writer)
+
+def main():
+    parser = argparse.ArgumentParser(description="Extract articles from ZIP of gzipped HTML files")
+    parser.add_argument("zip_file", help="Path to input ZIP file")
+    parser.add_argument("-o", "--output", default="articles.csv", help="Output CSV file path")
+    parser.add_argument("-n", "--max-articles", type=int, default=max_articles, help="Maximum number of articles to process")
+    
+    args = parser.parse_args()
+    
+    print(f"\nStarting extraction from {args.zip_file}")
+    print(f"Maximum articles to process: {args.max_articles}")
+    print(f"Output will be saved to: {args.output}\n")
+    
+    success_count, fail_count = process_zip(
+        args.zip_file,
+        args.output,
+        args.max_articles
+    )
+    
+    print(f"\nProcessing complete!")
+    print(f"Successfully extracted: {success_count} articles")
+    print(f"Failed: {fail_count} files")
+
+if __name__ == "__main__":
+    main()

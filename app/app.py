@@ -7,6 +7,10 @@ import torch
 import pandas as pd
 import requests
 
+from Drone.prompts import AGENT_SYSTEM_PROMPT
+from Drone.tools import AGENT_TOOLS
+
+
 from urllib.error import URLError
 from redisvl.vectorize.text import HFTextVectorizer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -43,11 +47,21 @@ from Article_Recommender import (
 )
 '''
 
-from Drone_Picker import (
+'''
+from Drone.Drone_Picker import (
     search_drones_with_ai,
     uploaded_file_to_bytes,
     extract_text_from_pdf,
     generate_response_from_natural_query,
+)
+'''
+
+from Drone.agent import (
+    run_agent,
+)
+
+from DroneAgent import (
+    extract_text_from_pdf,
 )
 
 from app.constants import (
@@ -157,6 +171,14 @@ def get_author_by_article(article_id):
 # endregion
 
 def main(): 
+
+    print("yo")
+
+''' # Drone Agent V0.1
+    # Set the page config first, before any other Streamlit commands
+    st.set_page_config(page_title="Drone Agent 🤖", layout="wide")
+
+    # Styling for page layout and width
     st.markdown(
         """
         <style>
@@ -167,55 +189,37 @@ def main():
         </style>
         """,
         unsafe_allow_html=True
-)
+    )
     
+    # Make sure to load the OpenAI API key properly
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    if openai.api_key is None:
+        st.error("⚠️ OpenAI API Key not found. Please set it in the environment variables.")
+        return
 
-    uploaded_file = st.file_uploader("Upload drone regulations PDF", type="pdf")
+    # Display the title and a brief description
+    st.title("🤖 Natural Language Drone Agent")
+    st.markdown("Ask about drone specs, ranges, payload, etc...")
 
-    if uploaded_file:
-        if st.button("Turn PDF into Text"):
-            text_data = extract_text_from_pdf(uploaded_file_to_bytes(uploaded_file))
-            if (text_data is not None):
-                state.DRONE_PDF_TEXT = text_data
-                st.success("PDF turned into text")
+    # User input for query
+    user_query = st.text_input("Enter your query:", placeholder="Which drones can fly more than 20km?")
 
+    # Check if the user has inputted a query
+    if user_query:
+        with st.spinner("Thinking..."):
+            final_answer, thoughts = run_agent(user_query)  # Assuming run_agent function works as expected
 
-    prompt_text = st.text_area("Enter your prompt")
+        # Display final answer from the agent
+        st.success("✅ Final Answer:")
+        st.write(final_answer)
 
-    if st.button("Apply"):
-        results = generate_response_from_natural_query(prompt_text, state.DRONE_PDF_TEXT)
-    
-        # Separate SQL query and text response
-        text_response = results.get("text_response")  # Get textual response (if any)
-        sql_query = results.get("sql_query")  # Get SQL query (if any)        
-        additional_data_needed = results.get("needs_additional_data")
-
-        st.write(additional_data_needed)
-
-        # Display text response if available
-        if text_response:
-            st.subheader("Text Response")
-            st.write(text_response)
-
-        # Display SQL query if available
-        if sql_query:
-            st.subheader("Generated SQL Query")
-            st.code(sql_query, language="sql")
-
-            # Execute SQL query and show results in table
-            query_results = search_drones_with_ai(sql_query)  # Run SQL query
-            if query_results:
-                df = pd.DataFrame(query_results)  # Convert results to DataFrame
-                st.subheader("SQL Query Results")
-                st.dataframe(df.style.set_table_styles([
-                    {"selector": "th", "props": [("max-width", "150px")]},
-                    {"selector": "td", "props": [("max-width", "150px")]}
-                ]))  # Apply styles
-            else:
-                st.write("No results found.")
+        # Display the agent's reasoning steps
+        with st.expander("🧠 Agent Reasoning Steps"):
+            for step in thoughts:
+                st.markdown(f"```text\n{step}\n```")
 
 # Find all drones with a payload weight greater than 1000g
-
+'''
 
 ''' # Drone Picket
     st.markdown(
@@ -445,6 +449,8 @@ def main():
 '''
 
 ''' # Hotel codes
+
+
     # this data thing stores a list of dictionaries.
     data = load_data()
     print(type(data))
@@ -560,3 +566,6 @@ def main():
             % e.reason
         )'
 '''
+
+if __name__ == "__main__":
+    main()
